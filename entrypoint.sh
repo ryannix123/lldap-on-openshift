@@ -39,9 +39,9 @@ dc_value() {
 }
 
 # ---------------------------------------------------------------------------
-# Runtime directory setup (needed after PVC mount)
+# Runtime directory setup
 # ---------------------------------------------------------------------------
-mkdir -p "$LDAP_RUN_DIR"
+mkdir -p "$LDAP_RUN_DIR" "$LDAP_DATA_DIR"
 
 # ---------------------------------------------------------------------------
 # Bootstrap — runs only once per PVC lifetime
@@ -55,20 +55,6 @@ if [ ! -f "$INITIALIZED_FLAG" ]; then
 
   rm -rf "${SLAPD_CONFIG_DIR:?}"/*
 
-  # -------------------------------------------------------------------------
-  # Phase 1 — generate OLC config via slapd.conf + slaptest
-  #
-  # Using slapd.conf here (not OLC LDIF) because slaptest loads the full
-  # slapd binary including backend modules before converting, making all
-  # attribute types available. Direct slapadd -n 0 with OLC LDIF fails on
-  # Ubuntu when backend-specific attributes (olcDbIndex, olcDbMaxSize, etc.)
-  # are encountered before the mdb schema is registered.
-  # -------------------------------------------------------------------------
-  SLAPD_CONF=$(mktemp /tmp/slapd.XXXXXX.conf)
-  trap 'rm -f "$SLAPD_CONF"' EXIT
-
-  mkdir -p "$LDAP_DATA_DIR"
-
   # Locate the mdb backend module — path varies by arch on Ubuntu
   MODULE_PATH=$(find /usr/lib -name "back_mdb.so" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
   if [ -z "$MODULE_PATH" ]; then
@@ -76,6 +62,10 @@ if [ ! -f "$INITIALIZED_FLAG" ]; then
     exit 1
   fi
   log "Found mdb module at: ${MODULE_PATH}"
+
+  # Keep conf file alive through both slaptest and slapadd — remove at end
+  SLAPD_CONF=$(mktemp /tmp/slapd.XXXXXX.conf)
+  trap 'rm -f "$SLAPD_CONF"' EXIT
 
   cat > "$SLAPD_CONF" <<CONF
 modulepath      ${MODULE_PATH}
@@ -99,9 +89,9 @@ rootdn          "cn=admin,${LDAP_BASE_DN}"
 rootpw          ${ADMIN_PW_HASH}
 directory       ${LDAP_DATA_DIR}
 
-index   objectClass     eq,pres
+index   objectClass             eq,pres
 index   ou,cn,mail,surname,givenname eq,pres,sub
-index   uid             eq,pres,sub
+index   uid                     eq,pres,sub
 
 access to attrs=userPassword
     by self write
@@ -116,16 +106,20 @@ access to *
     by * none
 CONF
 
+  # -------------------------------------------------------------------------
+  # Phase 1 — convert slapd.conf to OLC format
+  # -u skips database open so slaptest doesn't fail on the empty data dir
+  # -------------------------------------------------------------------------
   log "Converting slapd.conf to OLC format..."
-  "$SLAPTEST" -f "$SLAPD_CONF" -F "$SLAPD_CONFIG_DIR"
-  rm -f "$SLAPD_CONF"
-  trap - EXIT
+  "$SLAPTEST" -u -f "$SLAPD_CONF" -F "$SLAPD_CONFIG_DIR"
 
   # -------------------------------------------------------------------------
-  # Phase 2 — bootstrap directory data
+  # Phase 2 — load base directory data
+  # Use -f (conf file) not -F (OLC dir) so slapadd initialises the mdb
+  # database itself from scratch in the data directory.
   # -------------------------------------------------------------------------
   log "Loading base directory data..."
-  "$SLAPADD" -b "${LDAP_BASE_DN}" -F "$SLAPD_CONFIG_DIR" <<DATA
+  "$SLAPADD" -f "$SLAPD_CONF" <<DATA
 dn: ${LDAP_BASE_DN}
 objectClass: top
 objectClass: dcObject
@@ -160,6 +154,9 @@ ou: groups
 description: Group memberships
 
 DATA
+
+  rm -f "$SLAPD_CONF"
+  trap - EXIT
 
   touch "$INITIALIZED_FLAG"
   log "Bootstrap complete."
