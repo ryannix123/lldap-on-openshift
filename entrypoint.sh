@@ -1,6 +1,22 @@
 #!/bin/bash
 # entrypoint.sh — idempotent bootstrap for OpenLDAP on OpenShift
+# Uses LTB project OpenLDAP 2.6 package paths (/usr/local/openldap/)
 set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# LTB package path prefix
+# ---------------------------------------------------------------------------
+OPENLDAP_PREFIX="${OPENLDAP_PREFIX:-/usr/local/openldap}"
+
+SLAPD="${OPENLDAP_PREFIX}/libexec/slapd"
+SLAPADD="${OPENLDAP_PREFIX}/sbin/slapadd"
+SLAPPASSWD="${OPENLDAP_PREFIX}/sbin/slappasswd"
+
+SLAPD_CONFIG_DIR="${OPENLDAP_PREFIX}/etc/openldap/slapd.d"
+LDAP_DATA_DIR="${OPENLDAP_PREFIX}/var/openldap-data"
+LDAP_RUN_DIR="${OPENLDAP_PREFIX}/var/run"
+LDAP_SCHEMA_DIR="${OPENLDAP_PREFIX}/etc/openldap/schema"
+LDAP_CERTS_DIR="/etc/openldap/certs"
 
 # ---------------------------------------------------------------------------
 # Configuration — all overridable via environment variables in the Deployment
@@ -9,12 +25,8 @@ LDAP_BASE_DN="${LDAP_BASE_DN:-dc=example,dc=com}"
 LDAP_ORG="${LDAP_ORG:-Example Organization}"
 LDAP_ADMIN_PASSWORD="${LDAP_ADMIN_PASSWORD:-changeme}"
 LDAP_READONLY_PASSWORD="${LDAP_READONLY_PASSWORD:-readonly}"
-LDAP_LOG_LEVEL="${LDAP_LOG_LEVEL:-256}"          # 256 = stats; 0 = silent
+LDAP_LOG_LEVEL="${LDAP_LOG_LEVEL:-256}"
 
-SLAPD_CONFIG_DIR="/etc/openldap/slapd.d"
-LDAP_DATA_DIR="/var/lib/ldap"
-LDAP_RUN_DIR="/run/openldap"
-LDAP_CERTS_DIR="/etc/openldap/certs"
 INITIALIZED_FLAG="${LDAP_DATA_DIR}/.initialized"
 
 # ---------------------------------------------------------------------------
@@ -22,13 +34,13 @@ INITIALIZED_FLAG="${LDAP_DATA_DIR}/.initialized"
 # ---------------------------------------------------------------------------
 log() { echo "[entrypoint] $*"; }
 
-# Extract the first dc= value from the base DN (e.g. dc=example,dc=com → example)
+# Extract the first dc= value (e.g. dc=example,dc=com → example)
 dc_value() {
   echo "$LDAP_BASE_DN" | grep -o 'dc=[^,]*' | head -1 | cut -d= -f2
 }
 
 # ---------------------------------------------------------------------------
-# Runtime directory setup (needed after PVC mount, which may be empty)
+# Runtime directory setup (needed after PVC mount)
 # ---------------------------------------------------------------------------
 mkdir -p "$LDAP_RUN_DIR"
 
@@ -38,17 +50,16 @@ mkdir -p "$LDAP_RUN_DIR"
 if [ ! -f "$INITIALIZED_FLAG" ]; then
   log "First run — bootstrapping OpenLDAP (base DN: ${LDAP_BASE_DN})"
 
-  # Hash passwords via slappasswd
-  ADMIN_PW_HASH=$(slappasswd -s "$LDAP_ADMIN_PASSWORD")
-  READONLY_PW_HASH=$(slappasswd -s "$LDAP_READONLY_PASSWORD")
+  ADMIN_PW_HASH=$("$SLAPPASSWD" -s "$LDAP_ADMIN_PASSWORD")
+  READONLY_PW_HASH=$("$SLAPPASSWD" -s "$LDAP_READONLY_PASSWORD")
   DC_VALUE=$(dc_value)
 
   # Clear any stale config from a previous incomplete init
   rm -rf "${SLAPD_CONFIG_DIR:?}"/*
 
   # -------------------------------------------------------------------------
-  # Phase 1 — OLC (cn=config) bootstrap
-  # Write to a temp file so slapadd can follow schema include: paths
+  # Phase 1 — OLC (cn=config) bootstrap via temp file
+  # slapadd needs a real file path (not stdin) to follow include: directives
   # -------------------------------------------------------------------------
   CONFIG_LDIF=$(mktemp /tmp/slapd-config.XXXXXX.ldif)
   trap 'rm -f "$CONFIG_LDIF"' EXIT
@@ -57,8 +68,8 @@ if [ ! -f "$INITIALIZED_FLAG" ]; then
 dn: cn=config
 objectClass: olcGlobal
 cn: config
-olcArgsFile: /run/openldap/slapd.args
-olcPidFile: /run/openldap/slapd.pid
+olcArgsFile: ${LDAP_RUN_DIR}/slapd.args
+olcPidFile: ${LDAP_RUN_DIR}/slapd.pid
 olcTLSCertificateFile: /etc/openldap/certs/tls.crt
 olcTLSCertificateKeyFile: /etc/openldap/certs/tls.key
 olcLogLevel: ${LDAP_LOG_LEVEL}
@@ -67,10 +78,10 @@ dn: cn=schema,cn=config
 objectClass: olcSchemaConfig
 cn: schema
 
-include: file:///etc/openldap/schema/core.ldif
-include: file:///etc/openldap/schema/cosine.ldif
-include: file:///etc/openldap/schema/inetorgperson.ldif
-include: file:///etc/openldap/schema/nis.ldif
+include: file://${LDAP_SCHEMA_DIR}/core.ldif
+include: file://${LDAP_SCHEMA_DIR}/cosine.ldif
+include: file://${LDAP_SCHEMA_DIR}/inetorgperson.ldif
+include: file://${LDAP_SCHEMA_DIR}/nis.ldif
 
 dn: olcDatabase={-1}frontend,cn=config
 objectClass: olcDatabaseConfig
@@ -89,7 +100,7 @@ dn: olcDatabase={1}mdb,cn=config
 objectClass: olcDatabaseConfig
 objectClass: olcMdbConfig
 olcDatabase: {1}mdb
-olcDbDirectory: /var/lib/ldap
+olcDbDirectory: ${LDAP_DATA_DIR}
 olcSuffix: ${LDAP_BASE_DN}
 olcRootDN: cn=admin,${LDAP_BASE_DN}
 olcRootPW: ${ADMIN_PW_HASH}
@@ -105,7 +116,7 @@ olcAccess: {2}to * by dn.exact="cn=admin,${LDAP_BASE_DN}" write by dn.exact="cn=
 CONFIG
 
   log "Loading OLC configuration..."
-  slapadd -n 0 -F "$SLAPD_CONFIG_DIR" -l "$CONFIG_LDIF"
+  "$SLAPADD" -n 0 -F "$SLAPD_CONFIG_DIR" -l "$CONFIG_LDIF"
   rm -f "$CONFIG_LDIF"
   trap - EXIT
 
@@ -113,7 +124,7 @@ CONFIG
   # Phase 2 — Directory data bootstrap (database 1 = mdb)
   # -------------------------------------------------------------------------
   log "Loading base directory data..."
-  slapadd -n 1 -F "$SLAPD_CONFIG_DIR" <<DATA
+  "$SLAPADD" -n 1 -F "$SLAPD_CONFIG_DIR" <<DATA
 dn: ${LDAP_BASE_DN}
 objectClass: top
 objectClass: dcObject
@@ -145,7 +156,7 @@ dn: ou=groups,${LDAP_BASE_DN}
 objectClass: top
 objectClass: organizationalUnit
 ou: groups
-description: Group membership
+description: Group memberships
 
 DATA
 
@@ -157,9 +168,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# TLS detection — if the cert Secret isn't mounted yet (e.g. before the
-# OpenShift service cert controller has run), degrade gracefully to plain LDAP
-# so the pod stays Running and readiness probes pass.
+# TLS detection
 # ---------------------------------------------------------------------------
 LDAP_URIS="ldap://:1389/"
 
@@ -176,4 +185,4 @@ fi
 # Start slapd in the foreground (PID 1)
 # ---------------------------------------------------------------------------
 log "Starting slapd — URIs: ${LDAP_URIS}"
-exec slapd -d "${LDAP_LOG_LEVEL}" -F "$SLAPD_CONFIG_DIR" -h "${LDAP_URIS}"
+exec "$SLAPD" -d "${LDAP_LOG_LEVEL}" -F "$SLAPD_CONFIG_DIR" -h "${LDAP_URIS}"
