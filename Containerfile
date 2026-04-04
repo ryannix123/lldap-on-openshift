@@ -9,9 +9,13 @@ LABEL org.opencontainers.image.title="OpenLDAP on OpenShift" \
 # openldap-servers was removed from RHEL/CentOS Stream starting with RHEL 8.
 # The LTB (LDAP Tool Box) project maintains OpenLDAP 2.6 RPMs for EL10.
 # Package installs under /usr/local/openldap/ — see entrypoint.sh for paths.
-RUN curl -fsSL https://ltb-project.org/lib/RPM-GPG-KEY-LTB-project \
+#
+# Note: $releasever and $basearch are escaped with \$ so the shell writes them
+# literally into the repo file — dnf resolves them at install time, not bash.
+RUN dnf install -y curl epel-release && \
+    curl -fsSL https://ltb-project.org/lib/RPM-GPG-KEY-LTB-project \
       -o /etc/pki/rpm-gpg/RPM-GPG-KEY-LTB-project && \
-    printf '[ltb-project]\nname=LTB project packages\nbaseurl=https://ltb-project.org/rpm/openldap26/$releasever/$basearch\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-LTB-project\n' \
+    printf '[ltb-project]\nname=LTB project packages\nbaseurl=https://ltb-project.org/rpm/openldap26/\$releasever/\$basearch\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-LTB-project\n' \
       > /etc/yum.repos.d/ltb-project.repo && \
     dnf install -y openldap-ltb && \
     dnf clean all && \
