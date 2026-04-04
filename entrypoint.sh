@@ -1,14 +1,16 @@
 #!/bin/bash
 # entrypoint.sh — idempotent bootstrap for OpenLDAP on OpenShift
-# Ubuntu 24.04 standard paths (/etc/ldap/, /var/lib/ldap/)
+# Uses slapd.conf + slaptest for OLC generation — avoids Ubuntu slapadd
+# attribute-type-undefined issues with backend-specific OLC attributes.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Paths (Ubuntu/Debian standard OpenLDAP layout)
+# Paths (Ubuntu 24.04 standard OpenLDAP layout)
 # ---------------------------------------------------------------------------
 SLAPD="/usr/sbin/slapd"
 SLAPADD="/usr/sbin/slapadd"
 SLAPPASSWD="/usr/sbin/slappasswd"
+SLAPTEST="/usr/sbin/slaptest"
 
 SLAPD_CONFIG_DIR="/etc/ldap/slapd.d"
 LDAP_DATA_DIR="/var/lib/ldap"
@@ -32,7 +34,6 @@ INITIALIZED_FLAG="${LDAP_DATA_DIR}/.initialized"
 # ---------------------------------------------------------------------------
 log() { echo "[entrypoint] $*"; }
 
-# Extract the first dc= value (e.g. dc=example,dc=com → example)
 dc_value() {
   echo "$LDAP_BASE_DN" | grep -o 'dc=[^,]*' | head -1 | cut -d= -f2
 }
@@ -52,73 +53,66 @@ if [ ! -f "$INITIALIZED_FLAG" ]; then
   READONLY_PW_HASH=$("$SLAPPASSWD" -s "$LDAP_READONLY_PASSWORD")
   DC_VALUE=$(dc_value)
 
-  # Clear any stale config from a previous incomplete init
   rm -rf "${SLAPD_CONFIG_DIR:?}"/*
 
   # -------------------------------------------------------------------------
-  # Phase 1 — OLC (cn=config) bootstrap via temp file
-  # slapadd needs a real file path (not stdin) to follow include: directives
+  # Phase 1 — generate OLC config via slapd.conf + slaptest
+  #
+  # Using slapd.conf here (not OLC LDIF) because slaptest loads the full
+  # slapd binary including backend modules before converting, making all
+  # attribute types available. Direct slapadd -n 0 with OLC LDIF fails on
+  # Ubuntu when backend-specific attributes (olcDbIndex, olcDbMaxSize, etc.)
+  # are encountered before the mdb schema is registered.
   # -------------------------------------------------------------------------
-  CONFIG_LDIF=$(mktemp /tmp/slapd-config.XXXXXX.ldif)
-  trap 'rm -f "$CONFIG_LDIF"' EXIT
+  SLAPD_CONF=$(mktemp /tmp/slapd.XXXXXX.conf)
+  trap 'rm -f "$SLAPD_CONF"' EXIT
 
-  cat > "$CONFIG_LDIF" <<CONFIG
-dn: cn=config
-objectClass: olcGlobal
-cn: config
-olcArgsFile: ${LDAP_RUN_DIR}/slapd.args
-olcPidFile: ${LDAP_RUN_DIR}/slapd.pid
-olcTLSCertificateFile: /etc/ldap/certs/tls.crt
-olcTLSCertificateKeyFile: /etc/ldap/certs/tls.key
-olcLogLevel: ${LDAP_LOG_LEVEL}
+  cat > "$SLAPD_CONF" <<CONF
+include         ${LDAP_SCHEMA_DIR}/core.schema
+include         ${LDAP_SCHEMA_DIR}/cosine.schema
+include         ${LDAP_SCHEMA_DIR}/inetorgperson.schema
+include         ${LDAP_SCHEMA_DIR}/nis.schema
 
-dn: cn=schema,cn=config
-objectClass: olcSchemaConfig
-cn: schema
+pidfile         ${LDAP_RUN_DIR}/slapd.pid
+argsfile        ${LDAP_RUN_DIR}/slapd.args
+loglevel        ${LDAP_LOG_LEVEL}
 
-include: file://${LDAP_SCHEMA_DIR}/core.ldif
-include: file://${LDAP_SCHEMA_DIR}/cosine.ldif
-include: file://${LDAP_SCHEMA_DIR}/inetorgperson.ldif
-include: file://${LDAP_SCHEMA_DIR}/nis.ldif
+TLSCertificateFile      ${LDAP_CERTS_DIR}/tls.crt
+TLSCertificateKeyFile   ${LDAP_CERTS_DIR}/tls.key
 
-dn: olcDatabase={-1}frontend,cn=config
-objectClass: olcDatabaseConfig
-objectClass: olcFrontendConfig
-olcDatabase: {-1}frontend
-olcAccess: {0}to * by dn.exact=gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth manage by * break
-olcAccess: {1}to dn.exact="" by * read
-olcAccess: {2}to dn.base="cn=Subschema" by * read
+database        mdb
+suffix          "${LDAP_BASE_DN}"
+rootdn          "cn=admin,${LDAP_BASE_DN}"
+rootpw          ${ADMIN_PW_HASH}
+directory       ${LDAP_DATA_DIR}
 
-dn: olcDatabase={0}config,cn=config
-objectClass: olcDatabaseConfig
-olcDatabase: {0}config
-olcAccess: {0}to * by dn.exact=gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth manage by * break
+index   objectClass     eq,pres
+index   ou,cn,mail,surname,givenname eq,pres,sub
+index   uid             eq,pres,sub
+index   memberOf        eq
 
-dn: olcDatabase={1}mdb,cn=config
-objectClass: olcDatabaseConfig
-objectClass: olcMdbConfig
-olcDatabase: {1}mdb
-olcDbDirectory: ${LDAP_DATA_DIR}
-olcSuffix: ${LDAP_BASE_DN}
-olcRootDN: cn=admin,${LDAP_BASE_DN}
-olcRootPW: ${ADMIN_PW_HASH}
-olcDbIndex: objectClass eq,pres
-olcDbIndex: ou,cn,mail,surname,givenname eq,pres,sub
-olcDbIndex: uid eq,pres,sub
-olcDbIndex: memberOf eq
-olcAccess: {0}to attrs=userPassword by self write by anonymous auth by dn.exact="cn=admin,${LDAP_BASE_DN}" write by * none
-olcAccess: {1}to attrs=shadowLastChange by self write by * read
-olcAccess: {2}to * by dn.exact="cn=admin,${LDAP_BASE_DN}" write by dn.exact="cn=readonly,${LDAP_BASE_DN}" read by self read by * none
+access to attrs=userPassword
+    by self write
+    by anonymous auth
+    by dn.exact="cn=admin,${LDAP_BASE_DN}" write
+    by * none
+access to attrs=shadowLastChange
+    by self write
+    by * read
+access to *
+    by dn.exact="cn=admin,${LDAP_BASE_DN}" write
+    by dn.exact="cn=readonly,${LDAP_BASE_DN}" read
+    by self read
+    by * none
+CONF
 
-CONFIG
-
-  log "Loading OLC configuration..."
-  "$SLAPADD" -n 0 -F "$SLAPD_CONFIG_DIR" -l "$CONFIG_LDIF"
-  rm -f "$CONFIG_LDIF"
+  log "Converting slapd.conf to OLC format..."
+  "$SLAPTEST" -f "$SLAPD_CONF" -F "$SLAPD_CONFIG_DIR"
+  rm -f "$SLAPD_CONF"
   trap - EXIT
 
   # -------------------------------------------------------------------------
-  # Phase 2 — Directory data bootstrap (database 1 = mdb)
+  # Phase 2 — bootstrap directory data
   # -------------------------------------------------------------------------
   log "Loading base directory data..."
   "$SLAPADD" -n 1 -F "$SLAPD_CONFIG_DIR" <<DATA
