@@ -1,7 +1,6 @@
 #!/bin/bash
 # entrypoint.sh — idempotent bootstrap for OpenLDAP on OpenShift
-# Runs slapd directly from slapd.conf — no OLC/slaptest conversion needed
-# for a static in-namespace auth service.
+# Runs slapd directly from slapd.conf — no OLC/slaptest conversion needed.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -10,13 +9,12 @@ set -euo pipefail
 SLAPD="/usr/sbin/slapd"
 SLAPADD="/usr/sbin/slapadd"
 SLAPPASSWD="/usr/sbin/slappasswd"
+SLAPTEST="/usr/sbin/slaptest"
 
 LDAP_DATA_DIR="/var/lib/ldap"
 LDAP_RUN_DIR="/run/slapd"
 LDAP_SCHEMA_DIR="/etc/ldap/schema"
 LDAP_CERTS_DIR="/etc/ldap/certs"
-
-# Generated each start from env vars — lives in tmpfs, never committed to PVC
 SLAPD_CONF="${LDAP_RUN_DIR}/slapd.conf"
 
 # ---------------------------------------------------------------------------
@@ -45,7 +43,7 @@ dc_value() {
 mkdir -p "$LDAP_RUN_DIR" "$LDAP_DATA_DIR"
 
 # ---------------------------------------------------------------------------
-# Locate the mdb backend module (path varies by arch on Ubuntu)
+# Locate mdb backend module (path varies by arch on Ubuntu)
 # ---------------------------------------------------------------------------
 MODULE_PATH=$(find /usr/lib -name "back_mdb.so" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
 if [ -z "$MODULE_PATH" ]; then
@@ -55,7 +53,28 @@ fi
 log "Found mdb module at: ${MODULE_PATH}"
 
 # ---------------------------------------------------------------------------
-# Generate slapd.conf on every start from current env vars
+# TLS — use -r (readable) not -f (exists) to verify actual access.
+# Kubernetes secret mounts exist but may not be readable if fsGroup
+# does not match the container's supplemental groups.
+# ---------------------------------------------------------------------------
+LDAP_URIS="ldap://:1389/"
+TLS_DIRECTIVES=""
+
+if [ -r "${LDAP_CERTS_DIR}/tls.crt" ] && [ -r "${LDAP_CERTS_DIR}/tls.key" ]; then
+  log "TLS certificates readable — enabling LDAPS on :1636"
+  LDAP_URIS="ldap://:1389/ ldaps://:1636/"
+  TLS_DIRECTIVES="TLSCertificateFile      ${LDAP_CERTS_DIR}/tls.crt
+TLSCertificateKeyFile   ${LDAP_CERTS_DIR}/tls.key"
+else
+  log "WARNING: TLS cert/key not readable at ${LDAP_CERTS_DIR} — LDAPS disabled."
+  log "  cert exists:  $([ -f "${LDAP_CERTS_DIR}/tls.crt" ] && echo yes || echo no)"
+  log "  cert readable:$([ -r "${LDAP_CERTS_DIR}/tls.crt" ] && echo yes || echo no)"
+  log "  key exists:   $([ -f "${LDAP_CERTS_DIR}/tls.key" ] && echo yes || echo no)"
+  log "  key readable: $([ -r "${LDAP_CERTS_DIR}/tls.key" ] && echo yes || echo no)"
+fi
+
+# ---------------------------------------------------------------------------
+# Generate slapd.conf from current env vars on every start
 # ---------------------------------------------------------------------------
 ADMIN_PW_HASH=$("$SLAPPASSWD" -s "$LDAP_ADMIN_PASSWORD")
 READONLY_PW_HASH=$("$SLAPPASSWD" -s "$LDAP_READONLY_PASSWORD")
@@ -71,8 +90,7 @@ include         ${LDAP_SCHEMA_DIR}/nis.schema
 
 loglevel        ${LDAP_LOG_LEVEL}
 
-TLSCertificateFile      ${LDAP_CERTS_DIR}/tls.crt
-TLSCertificateKeyFile   ${LDAP_CERTS_DIR}/tls.key
+${TLS_DIRECTIVES}
 
 database        mdb
 suffix          "${LDAP_BASE_DN}"
@@ -104,7 +122,6 @@ if [ ! -f "$INITIALIZED_FLAG" ]; then
   log "First run — bootstrapping directory (base DN: ${LDAP_BASE_DN})"
 
   DC_VALUE=$(dc_value)
-
   "$SLAPADD" -f "$SLAPD_CONF" <<DATA
 dn: ${LDAP_BASE_DN}
 objectClass: top
@@ -148,23 +165,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# TLS detection
+# Validate config before handing off to slapd
 # ---------------------------------------------------------------------------
-LDAP_URIS="ldap://:1389/"
-
-if [ -f "${LDAP_CERTS_DIR}/tls.crt" ] && [ -f "${LDAP_CERTS_DIR}/tls.key" ]; then
-  log "TLS certificates found — enabling LDAPS on :1636"
-  LDAP_URIS="ldap://:1389/ ldaps://:1636/"
-else
-  log "WARNING: TLS cert/key not found at ${LDAP_CERTS_DIR} — LDAPS disabled."
-  log "  Ensure the Service annotation 'service.beta.openshift.io/serving-cert-secret-name'"
-  log "  is set and the generated Secret is mounted at ${LDAP_CERTS_DIR}."
+log "Validating slapd.conf..."
+if ! "$SLAPTEST" -f "$SLAPD_CONF" -u 2>&1; then
+  log "ERROR: slapd.conf validation failed — see above."
+  exit 1
 fi
+log "Config valid."
 
 # ---------------------------------------------------------------------------
 # Start slapd in the foreground (PID 1)
 # ---------------------------------------------------------------------------
-# Remove stale pid/args files that persist across CrashLoopBackOff restarts
 rm -f "${LDAP_RUN_DIR}/slapd.pid" "${LDAP_RUN_DIR}/slapd.args"
 
 log "Starting slapd — URIs: ${LDAP_URIS}"
