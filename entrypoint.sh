@@ -102,7 +102,6 @@ olcDbDirectory: ${LDAP_DATA_DIR}
 olcSuffix: ${LDAP_BASE_DN}
 olcRootDN: cn=admin,${LDAP_BASE_DN}
 olcRootPW: ${ADMIN_PW_HASH}
-olcDbMaxSize: 1073741824
 olcDbIndex: objectClass eq,pres
 olcDbIndex: ou,cn,mail,surname,givenname eq,pres,sub
 olcDbIndex: uid eq,pres,sub

@@ -64,13 +64,12 @@ oc login --token=<token> --server=<api-url>
 ### Run the playbook
 
 ```bash
-ansible-playbook deploy.yml
+ansible-playbook -i localhost, deploy.yml
 ```
 
-The playbook prompts for five values, then handles everything in the correct order — namespace, secret, Service (required first for TLS cert injection), PVC, ConfigMap, and Deployment. It waits for the cert controller to issue the TLS secret and for the pod to become ready before printing the connection summary.
+The playbook reads your current namespace from `oc project` automatically. It prompts for four values, then handles everything in the correct order — namespace, secret, Service (required first for TLS cert injection), PVC, ConfigMap, and Deployment. It waits for the cert controller to issue the TLS secret and for the pod to become ready before printing the connection summary.
 
 ```
-OpenShift namespace [openldap]:
 LDAP base DN [dc=example,dc=com]:
 Organization name [Example Organization]:
 Admin bind DN password:
