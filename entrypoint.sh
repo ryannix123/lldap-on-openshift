@@ -117,7 +117,7 @@ access to *
 CONF
 
   log "Converting slapd.conf to OLC format..."
-  "$SLAPTEST" -f "$SLAPD_CONF" -F "$SLAPD_CONFIG_DIR"
+  "$SLAPTEST" -u -f "$SLAPD_CONF" -F "$SLAPD_CONFIG_DIR"
   rm -f "$SLAPD_CONF"
   trap - EXIT
 
