@@ -175,6 +175,15 @@ fi
 log "Config valid."
 
 # ---------------------------------------------------------------------------
+# Diagnostics — printed on every start to aid debugging
+# ---------------------------------------------------------------------------
+log "Running as: $(id)"
+log "Data directory: ${LDAP_DATA_DIR}"
+ls -lan "$LDAP_DATA_DIR" 2>&1 | while IFS= read -r line; do log "  $line"; done
+log "Certs directory: ${LDAP_CERTS_DIR}"
+ls -lan "$LDAP_CERTS_DIR" 2>&1 | while IFS= read -r line; do log "  $line"; done
+
+# ---------------------------------------------------------------------------
 # Start slapd in the foreground (PID 1)
 # ---------------------------------------------------------------------------
 rm -f "${LDAP_RUN_DIR}/slapd.pid" "${LDAP_RUN_DIR}/slapd.args"

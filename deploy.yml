@@ -155,6 +155,8 @@
                 labels:
                   app: openldap
               spec:
+                securityContext:
+                  fsGroup: 0
                 containers:
                   - name: slapd
                     image: quay.io/ryan_nix/openldap-openshift:latest
@@ -172,7 +174,7 @@
                       - name: LDAP_ORG
                         value: "{{ ldap_org }}"
                       - name: LDAP_LOG_LEVEL
-                        value: "256"
+                        value: "0"
                       - name: LDAP_ADMIN_PASSWORD
                         valueFrom:
                           secretKeyRef:
