@@ -97,12 +97,11 @@
           status: "True"
         wait_timeout: 120
 
-    - name: Get web UI route
-      kubernetes.core.k8s_info:
-        kind: Route
-        name: lldap-web
-        namespace: "{{ ocp_namespace }}"
-      register: lldap_route
+    - name: Get web UI route host
+      ansible.builtin.command: >
+        oc get route lldap-web -n {{ ocp_namespace }} -o jsonpath='{.spec.host}'
+      register: lldap_route_host
+      changed_when: false
 
     - name: Deployment summary
       ansible.builtin.debug:
@@ -115,5 +114,5 @@
           - " Admin DN:         uid=admin,ou=people,{{ ldap_base_dn }}"
           - " LDAP  (in-ns):    ldap://lldap:3890"
           - " LDAPS (in-ns):    ldaps://lldap:6360"
-          - " Web UI:           https://{{ lldap_route.resources[0].spec.host }}"
+          - " Web UI:           https://{{ lldap_route_host.stdout }}"
           - "================================================"

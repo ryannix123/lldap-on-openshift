@@ -1,18 +1,21 @@
 # lldap-on-openshift
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/lldap/lldap/main/art/logo.png" alt="lldap" width="200">
+  <img src="https://miro.medium.com/v2/resize:fit:598/format:webp/1*KanqkJzW8EURgM86TePD0w.jpeg" alt="lldap" width="220">
 </p>
 
 <p align="center">
   <a href="https://github.com/ryannix123/lldap-on-openshift/actions/workflows/build.yaml">
-    <img src="https://img.shields.io/github/actions/workflow/status/ryannix123/lldap-on-openshift/build.yaml?branch=main&label=build&logo=github" alt="Build">
+    <img src="https://img.shields.io/github/actions/workflow/status/ryannix123/lldap-on-openshift/build.yaml?branch=main&label=build&logo=github" alt="Build Status">
   </a>
   <a href="https://quay.io/repository/ryan_nix/lldap-openshift">
     <img src="https://img.shields.io/badge/quay.io-ryan__nix%2Flldap--openshift-1f6feb?logo=redhat" alt="Quay.io">
   </a>
+  <img src="https://img.shields.io/badge/lldap-0.6.2-brightgreen" alt="lldap version">
   <img src="https://img.shields.io/badge/base-lldap%3Astable-4b8bbe" alt="lldap stable">
   <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-6e7681" alt="Multi-arch">
+  <img src="https://img.shields.io/badge/OpenShift-compatible-EE0000?logo=redhat&logoColor=white" alt="OpenShift compatible">
+  <img src="https://img.shields.io/badge/RAM-~20MB-success" alt="Low memory footprint">
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License">
   </a>
