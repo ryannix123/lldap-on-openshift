@@ -251,14 +251,38 @@ Base DN:     ou=people,dc=example,dc=com
 
 ---
 
+## Securing the web UI Route
+
+By default the Route is publicly accessible to anyone with the URL. Add the OpenShift OAuth proxy annotation to restrict access to authenticated cluster users only:
+
+```bash
+oc annotate route lldap-web \
+  haproxy.router.openshift.io/ip_whitelist="" \
+  --overwrite
+```
+
+Or restrict to a specific IP range — useful for limiting web UI access to a VPN or office network:
+
+```bash
+oc annotate route lldap-web \
+  haproxy.router.openshift.io/ip_whitelist="10.0.0.0/8 192.168.1.0/24" \
+  --overwrite
+```
+
+You can also set this directly in `manifests/route.yaml` before deploying:
+
+```yaml
+metadata:
+  annotations:
+    haproxy.router.openshift.io/ip_whitelist: "10.0.0.0/8"
+```
+
+Note that LDAP and LDAPS traffic on ports 3890 and 6360 are ClusterIP only and already unreachable from outside the cluster — the Route only exposes the web UI on port 17170.
+
+---
+
 ## Image
 
 `quay.io/ryan_nix/lldap-openshift:latest`
 
 Built weekly from `lldap:stable`. Multi-arch: `linux/amd64` and `linux/arm64`. The upstream `docker-entrypoint.sh` is patched at build time to remove `chown` and `gosu` calls that are incompatible with OpenShift's restricted SCC.
-
----
-
-## License
-
-Apache-2.0 — Ryan Nix <ryan.nix@gmail.com>
